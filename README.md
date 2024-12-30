@@ -1,4 +1,4 @@
-# **my-project-debugger-woa**
+# **My-Project-Debugger-WOA**
 ## **Innovators/Developers​**
 - Rishi Divyakirti ​
 
