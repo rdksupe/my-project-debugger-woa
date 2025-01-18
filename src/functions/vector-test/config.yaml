@@ -1,0 +1,12 @@
+tasks:
+  - id: store_vector_task
+    fn: vector-test
+    args: 
+      action: "store"
+      data: <% inputs.body %>
+
+  - id: search_vector_task
+    fn: vector-test
+    args: 
+      action: "search"
+      data: <% inputs.body %>

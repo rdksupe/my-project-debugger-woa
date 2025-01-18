@@ -1,0 +1,104 @@
+http.post./api/vector/store:
+  fn: vector-store
+  authn: false
+  summary: Store vector embeddings
+  body:
+    content:
+      application/json:
+        schema:
+          type: object
+          properties:
+            text:
+              type: string
+              description: Text to be vectorized and stored
+  responses:
+    200:
+      description: Vector stored successfully
+    400:
+      description: Bad request - missing text
+    500:
+      description: Server error
+
+http.post./api/vector/search:
+  fn: vector-search
+  authn: false
+  summary: Search vector embeddings
+  body:
+    content:
+      application/json:
+        schema:
+          type: object
+          properties:
+            text:
+              type: string
+              description: Text to search with
+            limit:
+              type: number
+              description: Maximum number of results to return
+              default: 5
+  responses:
+    200:
+      description: Search results
+    400:
+      description: Bad request - missing text
+    500:
+      description: Server error
+
+http.post./api/code/context:
+  fn: context-search
+  authn: false
+  summary: Process files and error with LLM via Portkey
+  body:
+    content:
+      application/json:
+        schema:
+          type: object
+          properties:
+            files:
+              type: array
+              items:
+                type: object
+                required:
+                  - name
+                  - content
+                properties:
+                  name:
+                    type: string
+                    description: Name or path of the file
+                  content:
+                    type: string
+                    description: Content of the file
+              description: Array of file objects with content
+            errorLog:
+              type: string
+              description: Error log to include in context
+            prompt:
+              type: string
+              description: User's question or prompt
+            model:
+              type: string
+              description: LLM model to use (defaults to gpt-4)
+          required:
+            - files
+            - prompt
+    responses:
+      200:
+        description: Successful response from LLM
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                answer:
+                  type: string
+                  description: LLM's response
+                model:
+                  type: string
+                  description: Model used
+                usage:
+                  type: object
+                  description: Token usage information
+      400:
+        description: Invalid request format
+      503:
+        description: LLM service error
