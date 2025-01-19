@@ -10,7 +10,6 @@ export const portkey = new Portkey({
 export const defaultCompletionConfig = {
   model: 'hermes-3-llama-3.2-3b',
   temperature: 0.1, // Lower temperature for code-related tasks
-  max_tokens: 2048
 };
 
 interface FileContent {
@@ -26,47 +25,64 @@ export default async function (ctx: GSContext, args: PlainObject): Promise<GSSta
       console.log('Received body:', JSON.stringify(body, null, 2));
   
       const {
-        files,
-        errorLog,
-        prompt,
-        model = defaultCompletionConfig.model
+        analysisContext,
+        prompt
       } = body;
-  
+      
       // Debug logging
       console.log('Extracted data:', {
-        filesPresent: !!files,
-        filesLength: files?.length,
-        errorLogPresent: !!errorLog,
-        promptPresent: !!prompt
+        contextPresent: !!analysisContext,
+        filesPresent: !!analysisContext?.files,
+        filesLength: analysisContext?.files?.length,
+        errorLogPresent: !!analysisContext?.errorLog,
+        projectContextPresent: !!analysisContext?.projectContext,
+        promptPresent: !!prompt,
+        timestamp: analysisContext?.timestamp
       });
-  
+      
+      // Validate analysisContext
+      if (!analysisContext || typeof analysisContext !== 'object') {
+        return new GSStatus(
+          false,
+          400,
+          undefined,
+          {
+            error: "analysisContext object is required",
+            receivedBody: body
+          },
+          undefined
+        );
+      }
+      
+      // Validate files array
+      const { files } = analysisContext;
       if (!files) {
         return new GSStatus(
           false,
           400,
           undefined,
-          { 
-            error: "files array is required",
-            receivedBody: body 
+          {
+            error: "analysisContext.files array is required",
+            receivedContext: analysisContext
           },
           undefined
         );
       }
-  
+      
       if (!Array.isArray(files)) {
         return new GSStatus(
           false,
           400,
           undefined,
-          { 
-            error: "files must be an array",
+          {
+            error: "analysisContext.files must be an array",
             receivedType: typeof files,
             received: files
           },
           undefined
         );
       }
-  
+      
       // Validate each file object
       for (const file of files) {
         if (!file || typeof file !== 'object') {
@@ -74,7 +90,7 @@ export default async function (ctx: GSContext, args: PlainObject): Promise<GSSta
             false,
             400,
             undefined,
-            { 
+            {
               error: "Each file must be an object",
               receivedType: typeof file,
               received: file
@@ -82,26 +98,26 @@ export default async function (ctx: GSContext, args: PlainObject): Promise<GSSta
             undefined
           );
         }
-  
+      
         if (!file.name || typeof file.name !== 'string') {
           return new GSStatus(
             false,
             400,
             undefined,
-            { 
+            {
               error: "Each file must have a 'name' property of type string",
               received: file
             },
             undefined
           );
         }
-  
+      
         if (!file.content || typeof file.content !== 'string') {
           return new GSStatus(
             false,
             400,
             undefined,
-            { 
+            {
               error: "Each file must have a 'content' property of type string",
               received: file
             },
@@ -109,44 +125,49 @@ export default async function (ctx: GSContext, args: PlainObject): Promise<GSSta
           );
         }
       }
-  
+      
       // Format files into context
-      const fileContexts = files.map((file: FileContent) => 
+      const fileContexts = files.map((file: FileContent) =>
         `File: ${file.name}\n\n${file.content}\n\n`
       );
-  
+      
       // Create system message
       const systemMessage = {
         role: "system",
         content: `You are an expert software developer helping debug code issues.
-  Your task is to:
-  1. Analyze the provided code files
-  2. Review the error log
-  3. Answer the user's question with specific references to the code
-  4. Provide clear, actionable solutions
-  
-  Focus on being precise and practical in your responses.`
+      Your task is to:
+      1. Analyze the provided code files and project context
+      2. Review the error log
+      3. Answer the user's question with specific references to the code
+      4. Consider the project's environment and dependencies
+      5. Provide clear, actionable solutions
+      
+      Focus on being precise and practical in your responses.`
       };
-  
-      // Create context message
+      
+      // Create context message with project context
       const contextMessage = {
         role: "user",
         content: [
-          "Here are the relevant files and error log:",
+          "Project Context:",
+          "---",
+          analysisContext.projectContext,
+          "---",
+          "Relevant Files:",
           "---",
           ...fileContexts,
           "Error Log:",
-          errorLog || "No error log provided",
+          analysisContext.errorLog || "No error log provided",
           "---",
           "Question:",
-          prompt || "Please analyze the code and error log, and explain what might be wrong."
+          prompt || "Please analyze the code and error log, and explain what might be wrong.",
+          "---",
+          `Analysis requested at: ${analysisContext.timestamp}`
         ].join('\n')
       };
-  
       // Call LLM via Portkey
       try {
         const completion = await portkey.chat.completions.create({
-          model: model,
           messages: [
             systemMessage,
             contextMessage
