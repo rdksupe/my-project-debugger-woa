@@ -18,7 +18,7 @@ npm install
 godspeed serve
 ```
 
-2. Ensure you have `portkey.yaml` configured for your datasource.
+2. Ensure you have `tokenjs.yaml` configured for your datasource.
 
 3. Configure your LLM settings as per token.js docs:
 ```yaml
@@ -27,6 +27,21 @@ config:
   provider: "your-provider"
   model: "your-model"
 ```
+Like for example for using a model from ollama you would use the following config : 
+
+```
+type: tokenjs
+config:
+  provider: openai-compatible
+  baseURL: http://localhost:11434/v1
+  models:
+    - name: <name of your model>
+      config:
+        temperature: 0.7
+        max_tokens: 1000
+
+```
+For more information you can check tokenjs docs regarding this here https://docs.tokenjs.ai/providers
 
 ### Frontend Setup
 
