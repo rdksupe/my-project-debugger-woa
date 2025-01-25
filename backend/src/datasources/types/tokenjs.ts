@@ -1,4 +1,3 @@
-
 import { GSContext,  GSDataSource, GSStatus, logger, PlainObject,} from "@godspeedsystems/core";
 import { TokenJS } from "token.js";
 type LLMProvider = "openai" | "ai21" | "anthropic" | "gemini" | "cohere" | "bedrock" | "mistral" | "groq" | "perplexity" | "openrouter" | "openai-compatible";
@@ -30,7 +29,7 @@ async execute(ctx: GSContext, args: PlainObject): Promise<any> {
     const {prompt , messages , config = {}}     = args; 
     const finalmessages = messages || [{role:'user', content: prompt}]; 
     const yamlconfig =  (this.config as {config : TokenJSConfig}).config ;
-    console.log("Hello there this is the parsed yaml" + yamlconfig.baseURL);
+    console.log("Hello there this is the parsed yaml" + yamlconfig.models[0].name);
 
     const completion = await client.chat.completions.create({
         // Specify the provider and model

@@ -1,0 +1,9 @@
+type: tokenjs
+config:
+  provider: openai
+  baseURL: https://models.inference.ai.azure.com
+  models:
+    - name: gpt-4o-mini
+      config:
+        temperature: 0.7
+        max_tokens: 1000
