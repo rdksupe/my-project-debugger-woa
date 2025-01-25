@@ -8,7 +8,7 @@ export const portkey = new Portkey({
 
 // Default configuration for chat completion
 export const defaultCompletionConfig = {
-  model: 'hermes-3-llama-3.2-3b',
+  model: 'deepseek-r1-distill-qwen-7b',
   temperature: 0.1, // Lower temperature for code-related tasks
 };
 

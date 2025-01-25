@@ -125,3 +125,32 @@ http.post./api/code/context:
         description: Invalid request format or missing required fields
       503:
         description: LLM service unavailable or error
+
+http.post./chat:
+  summary: "Multi-provider chat completion endpoint"
+  authn: false
+  fn: chat
+  body:
+    content:
+      application/json:
+        schema:
+          type: object
+          properties:
+            messages:
+              type: array
+              items:
+                type: object
+                properties:
+                  role:
+                    type: string
+                    enum: [system, user, assistant, function]
+                  content:
+                    type: string
+            prompt:
+              type: string
+            config:
+              type: object
+              additionalProperties: true
+          anyOf:
+            - required: [messages]
+            - required: [prompt]

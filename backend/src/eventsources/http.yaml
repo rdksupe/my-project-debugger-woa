@@ -43,7 +43,11 @@ authn:
 #     args: <%inputs.user.role === 'admin'%>
 
 # validation error handling, to transform error responses
-on_request_validation_error: validations.request.standardResponseyml
+
+on_request_validation_error:
+  - id: request_validation_error_handler
+    fn: com.gs.return
+    args: <%inputs%>
 on_response_validation_error:
   - id: response_validation_error_handler
     fn: com.gs.return

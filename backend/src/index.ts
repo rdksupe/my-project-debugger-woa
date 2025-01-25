@@ -9,10 +9,12 @@ try {
 }
 
 import Godspeed from "@godspeedsystems/core";
+import { logger } from '@godspeedsystems/core';
 
 
 // create a godspeed
 const gsApp = new Godspeed();
+logger.info('Available datasources:', Object.keys(gsApp.datasources));
 
 // initilize the Godspeed App
 // this is responsible to load all kind of entities
