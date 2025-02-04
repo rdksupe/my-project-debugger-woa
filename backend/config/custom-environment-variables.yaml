@@ -1,0 +1,1 @@
+node_env: NODE_ENV #where NODE_ENV is an environment variable set by you. This will be accessible as config.node_env in inline script and ctx.config.node_env in JS/TS
