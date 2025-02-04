@@ -18,7 +18,8 @@
     "commander": "^11.1.0",
     "glob": "^11.0.1",
     "inquirer": "^9.3.7",
-    "tree-sitter-cli": "^0.24.7"
+    "tree-sitter-cli": "^0.24.7",
+    "uuid": "^11.0.5"
   },
   "devDependencies": {
     "@types/glob": "^8.1.0",

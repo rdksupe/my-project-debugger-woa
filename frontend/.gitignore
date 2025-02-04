@@ -32,7 +32,7 @@ coverage/
 # Debug logs
 logs/
 *.log
-
+*.json
 # Optional npm cache directory
 .npm
 

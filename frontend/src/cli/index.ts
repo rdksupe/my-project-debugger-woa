@@ -10,6 +10,12 @@
   import { promisify } from 'util';
   import { ProjectContextGatherer } from '../utils/ProjectContextGatherer';
   import { writeFile } from 'fs/promises';
+  import { ConversationManager } from '../utils/conversationManager';
+  import { ConversationSession, ConversationMessage } from '../types/conversation';
+  import { FileHandler } from '../utils/fileHandler';
+  import { FileContent } from '../types/common';
+  import { v4 as uuidv4 } from 'uuid';
+  import { RipgrepContextGatherer } from '../utils/ripgrepContext';
   // Type definitions
 
   interface AnalysisContext {
@@ -19,10 +25,7 @@
     timestamp: string;
   }
 
-  interface FileContent {
-    name: string;
-    content: string;
-  }
+
 
   interface LLMResponse {
     answer: string;
@@ -32,6 +35,14 @@
       completion_tokens: number;
       total_tokens: number;
     };
+    choices?: Array<{
+      message: {
+        content: string;
+        role: string;
+      };
+      index: number;
+      finish_reason: string;
+    }>;
   }
 
   interface APIResponse {
@@ -386,31 +397,6 @@
     }
   }
 
-  async function getFilesFromDirectory(directory: string): Promise<string[]> {
-    try {
-      const files = await glob(DEFAULT_FILE_PATTERNS, {
-        cwd: directory,
-        ignore: IGNORE_PATTERNS,
-        absolute: true,
-        nodir: true
-      });
-      return files;
-    } catch (error) {
-      console.error(chalk.red('Error scanning directory:', error));
-      return [];
-    }
-  }
-
-  async function readFileContent(filePath: string): Promise<string> {
-    try {
-      const absolutePath = path.resolve(process.cwd(), filePath);
-      return await fs.readFile(absolutePath, 'utf-8');
-    } catch (error) {
-      console.error(chalk.red(`Error reading file ${filePath}:`, error));
-      throw error;
-    }
-  }
-
   // Add new helper function
   async function saveContextToFile(
     context: any,
@@ -438,7 +424,8 @@
     files: FileContent[],
     errorLog: string,
     prompt?: string,
-    saveContext: boolean = false
+    saveContext: boolean = false,
+    session?: ConversationSession
   ): Promise<APIResponse> {
     try {
       // Parse stack trace from error log
@@ -454,7 +441,8 @@
 
       const requestPayload = {
         analysisContext,
-        prompt: prompt || "Please analyze the code and error log, and explain what might be wrong."
+        prompt: prompt || "Please analyze the code and error log, and explain what might be wrong.",
+        conversationHistory: session?.messages || [] // Include conversation history
       };
 
       // Save context if requested
@@ -467,18 +455,26 @@
         }
       }
 
-      const response = await axios.post<APIResponse>(DEFAULT_API_URL, requestPayload);
-
-      // Debug logging
-      console.log(chalk.yellow('\nDebug: API Response Structure:'));
-      console.log(JSON.stringify(response.data, null, 2));
-
-      // Verify the response has the required fields
-      if (!response.data.answer || !response.data.model) {
-        throw new Error('Invalid API response structure');
+      const response = await axios.post<LLMResponse>(DEFAULT_API_URL, requestPayload);
+      
+      // Handle both direct and choices-based responses
+      let answer: string;
+      if (response.data.choices && response.data.choices.length > 0) {
+        answer = response.data.choices[0].message.content;
+      } else if (response.data.answer) {
+        answer = response.data.answer;
+      } else {
+        throw new Error('No valid answer found in response');
       }
 
-      return response.data;
+      // Construct standardized API response
+      const apiResponse: APIResponse = {
+        answer,
+        model: response.data.model || 'unknown',
+        usage: response.data.usage
+      };
+
+      return apiResponse;
     } catch (error) {
       // Enhanced error logging
       console.error(chalk.red('\nDetailed Error Information:'));
@@ -528,7 +524,7 @@
     program
       .name('code-help')
       .description('CLI tool to get AI help with code issues')
-      .version('1.1.0.2');
+      .version('1.1.0.3');
 
     // Add new command for context
     program
@@ -557,6 +553,7 @@
           console.log(chalk.blue('\nCode Analysis Helper'));
           console.log(chalk.blue('===================\n'));
 
+          const fileHandler = new FileHandler(options.directory);
           let files: FileContent[] = [];
 
           // File Selection Method
@@ -572,80 +569,7 @@
             }
           ]);
 
-          if (fileQuestions.fileSelection === 'scan') {
-            const currentDir = options.directory || process.cwd();
-            console.log(chalk.blue(`\nScanning directory: ${currentDir}`));
-            
-            const foundFiles = await getFilesFromDirectory(currentDir);
-            
-            if (foundFiles.length === 0) {
-              console.log(chalk.yellow('\nNo matching files found in the directory.'));
-              return;
-            }
-
-            const fileSelection = await inquirer.prompt<{ selectedFiles: string[] }>([
-              {
-                type: 'checkbox',
-                name: 'selectedFiles',
-                message: 'Select files to analyze (use space to select):',
-                choices: foundFiles.map(file => ({
-                  name: path.relative(currentDir, file),
-                  value: file
-                })),
-                validate: (answer: string[]) => {
-                  if (answer.length < 1) {
-                    return 'You must choose at least one file.';
-                  }
-                  return true;
-                }
-              }
-            ]);
-
-            for (const file of fileSelection.selectedFiles) {
-              const content = await readFileContent(file);
-              files.push({
-                name: path.relative(currentDir, file),
-                content
-              });
-            }
-          } else {
-            // Manual file addition
-            let addMoreFiles = true;
-            while (addMoreFiles) {
-              const fileAnswers = await inquirer.prompt<{ filePath: string }>([
-                {
-                  type: 'input',
-                  name: 'filePath',
-                  message: 'Enter the path to the file:',
-                  validate: async (input: string) => {
-                    try {
-                      await fs.access(path.resolve(process.cwd(), input));
-                      return true;
-                    } catch {
-                      return 'File does not exist!';
-                    }
-                  }
-                }
-              ]);
-
-              const content = await readFileContent(fileAnswers.filePath);
-              files.push({
-                name: path.basename(fileAnswers.filePath),
-                content
-              });
-
-              const moreFiles = await inquirer.prompt<{ add: boolean }>([
-                {
-                  type: 'confirm',
-                  name: 'add',
-                  message: 'Would you like to add another file?',
-                  default: false
-                }
-              ]);
-
-              addMoreFiles = moreFiles.add;
-            }
-          }
+          files = await fileHandler.selectFiles([], fileQuestions.fileSelection);
 
           // Error Log Input
           const errorLogQuestions = await inquirer.prompt<{ errorLog: string }>([
@@ -710,7 +634,7 @@
     
             // Add selected files to analysis
             for (const file of fileSelection.selectedFiles) {
-              const content = await readFileContent(file);
+              const content = await fileHandler.readFileContent(file);
               files.push({
                 name: path.relative(options.directory, file),
                 content
@@ -789,6 +713,322 @@
           }
         } catch (error) {
           console.error(chalk.red('Error during analysis:', error));
+          if (options.debug) {
+            console.error('\nStack trace:', error);
+          }
+        }
+      });
+
+    // Add to the main CLI application
+    program
+      .command('chat')
+      .description('Start an interactive debugging session')
+      .option('-d, --directory <path>', 'Specify directory to scan', process.cwd())
+      .option('--debug', 'Enable debug mode', false)
+      .action(async (options) => {
+        const conversationManager = new ConversationManager(options.directory);
+        const fileHandler = new FileHandler(options.directory);
+        await conversationManager.initialize();
+        
+        const session = await conversationManager.createSession();
+        let currentFiles: FileContent[] = [];
+        let currentErrorLog: string = '';
+        let lastMessageId: string = '';
+
+        console.log(chalk.blue('\nStarting interactive debugging session...'));
+        console.log(chalk.gray('Type "quit" to exit, "history" to view conversation history\n'));
+
+        while (true) {
+          const { command } = await inquirer.prompt<{ command: string }>([{
+            type: 'input',
+            name: 'command',
+            message: chalk.green('What would you like to do?')
+          }]);
+
+          if (command.toLowerCase() === 'quit') break;
+          if (command.toLowerCase() === 'history') {
+            // Show conversation history with resolved error summaries
+            console.log(chalk.yellow('\nConversation History:'));
+            session.messages.forEach((msg) => {
+              const prefix = msg.isResolved ? chalk.gray('(Resolved) ') : '';
+              console.log(chalk.gray(`\n--- ${prefix}${msg.role.toUpperCase()} (${msg.timestamp}) ---`));
+              if (msg.contextUpdate) {
+                console.log(chalk.cyan('Context Updates:'));
+                if (msg.contextUpdate.addedFiles?.length) {
+                  console.log(chalk.green(`Added files: ${msg.contextUpdate.addedFiles.join(', ')}`));
+                }
+                if (msg.contextUpdate.removedFiles?.length) {
+                  console.log(chalk.red(`Removed files: ${msg.contextUpdate.removedFiles.join(', ')}`));
+                }
+                if (msg.contextUpdate.errorLogChanged) {
+                  console.log(chalk.yellow('Error log was updated'));
+                }
+              }
+              console.log(msg.content);
+            });
+            continue;
+          }
+
+          // Initial file selection if no files are selected
+          if (currentFiles.length === 0) {
+            const { fileSelection } = await inquirer.prompt<{ fileSelection: 'scan' | 'manual' }>([{
+              type: 'list',
+              name: 'fileSelection',
+              message: 'How would you like to add files?',
+              choices: [
+                { name: 'Scan current directory', value: 'scan' },
+                { name: 'Add files manually', value: 'manual' }
+              ]
+            }]);
+
+            currentFiles = await fileHandler.selectFiles([], fileSelection);
+          }
+
+          // Error log handling
+          let errorLogChanged = false;
+          if (!currentErrorLog) {
+            const { errorLog } = await inquirer.prompt<{ errorLog: string }>([{
+              type: 'editor',
+              name: 'errorLog',
+              message: 'Please paste your error log:',
+              default: ''
+            }]);
+            currentErrorLog = errorLog;
+            errorLogChanged = true;
+          } else {
+            const { updateErrorLog } = await inquirer.prompt<{ updateErrorLog: boolean }>([{
+              type: 'confirm',
+              name: 'updateErrorLog',
+              message: 'Would you like to update the error log?',
+              default: false
+            }]);
+
+            if (updateErrorLog) {
+              const { errorLog } = await inquirer.prompt<{ errorLog: string }>([{
+                type: 'editor',
+                name: 'errorLog',
+                message: 'Please paste your updated error log:',
+                default: currentErrorLog
+              }]);
+              currentErrorLog = errorLog;
+              errorLogChanged = true;
+            }
+          }
+
+          const messageId = uuidv4();
+          const message: ConversationMessage = {
+            id: messageId,
+            role: 'user',
+            content: command,
+            timestamp: new Date().toISOString(),
+            files: currentFiles.map(f => f.name),
+            errorLog: currentErrorLog,
+            replyTo: lastMessageId,
+            contextUpdate: {
+              errorLogChanged
+            }
+          };
+
+          await conversationManager.addMessage(session.id, message);
+
+          try {
+            const response = await sendToLLM(
+              currentFiles,
+              currentErrorLog,
+              command,
+              options.saveContext,
+              session
+            );
+
+            const assistantMessageId = uuidv4();
+            const assistantMessage: ConversationMessage = {
+              id: assistantMessageId,
+              role: 'assistant',
+              content: response.answer,
+              timestamp: new Date().toISOString(),
+              replyTo: messageId
+            };
+
+            lastMessageId = assistantMessageId;
+            await conversationManager.addMessage(session.id, assistantMessage);
+            displayFormattedResponse(response);
+
+            // Ask if error is resolved
+            const { isResolved } = await inquirer.prompt<{ isResolved: boolean }>([{
+              type: 'confirm',
+              name: 'isResolved',
+              message: 'Has this error been resolved?',
+              default: false
+            }]);
+
+            if (isResolved) {
+              await conversationManager.markErrorAsResolved(
+                session.id,
+                currentErrorLog,
+                [message, assistantMessage]
+              );
+
+              const resolutionMessage: ConversationMessage = {
+                id: uuidv4(),
+                role: 'system',
+                content: 'Session ended - Error resolved',
+                timestamp: new Date().toISOString(),
+                replyTo: assistantMessageId,
+                isResolved: true
+              };
+
+              await conversationManager.addMessage(session.id, resolutionMessage);
+              console.log(chalk.green('\nGreat! Error has been resolved.'));
+              break; // End the session
+            }
+
+            // Continue with context update handling if error not resolved
+            const { needMoreContext } = await inquirer.prompt<{ needMoreContext: boolean }>([{
+              type: 'confirm',
+              name: 'needMoreContext',
+              message: 'Would you like to update the context (files/error log)?',
+              default: false
+            }]);
+
+            if (needMoreContext) {
+              const { keepExisting } = await inquirer.prompt<{ keepExisting: boolean }>([{
+                type: 'confirm',
+                name: 'keepExisting',
+                message: 'Would you like to keep the existing files?',
+                default: true
+              }]);
+
+              const existingFiles = [...currentFiles];
+
+              const { fileSelection } = await inquirer.prompt<{ fileSelection: 'scan' | 'manual' }>([{
+                type: 'list',
+                name: 'fileSelection',
+                message: 'How would you like to add more files?',
+                choices: [
+                  { name: 'Scan current directory', value: 'scan' },
+                  { name: 'Add files manually', value: 'manual' }
+                ]
+              }]);
+
+              currentFiles = await fileHandler.selectFiles(
+                keepExisting ? currentFiles : [],
+                fileSelection
+              );
+
+              const contextUpdateMessage: ConversationMessage = {
+                id: uuidv4(),
+                role: 'system',
+                content: 'Context updated',
+                timestamp: new Date().toISOString(),
+                replyTo: assistantMessageId,
+                contextUpdate: {
+                  addedFiles: currentFiles.slice(keepExisting ? existingFiles.length : 0).map(f => f.name),
+                  removedFiles: keepExisting ? [] : existingFiles.map(f => f.name)
+                }
+              };
+
+              await conversationManager.addMessage(session.id, contextUpdateMessage);
+            }
+
+          } catch (error) {
+            console.error(chalk.red('Error during analysis:', error));
+            const errorMessage: ConversationMessage = {
+              id: uuidv4(),
+              role: 'system',
+              content: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+              timestamp: new Date().toISOString(),
+              replyTo: messageId
+            };
+            await conversationManager.addMessage(session.id, errorMessage);
+          }
+        }
+
+        session.endTime = new Date().toISOString();
+        await conversationManager.saveSession(session);
+        console.log(chalk.blue('\nSession ended. Goodbye!'));
+      });
+
+    program
+      .command('rg-test')
+      .description('Test ripgrep-based context gathering')
+      .option('-d, --directory <path>', 'Specify directory to scan', process.cwd())
+      .option('--debug', 'Enable debug mode', false)
+      .option('-s, --save', 'Save analysis to file', false)
+      .action(async (options) => {
+        try {
+          console.log(chalk.blue('\nRipgrep Context Gatherer Test'));
+          console.log(chalk.blue('===========================\n'));
+
+          // Get error log input
+          const { errorLog } = await inquirer.prompt<{ errorLog: string }>([{
+            type: 'editor',
+            name: 'errorLog',
+            message: 'Please paste your error log:',
+            default: ''
+          }]);
+
+          console.log(chalk.blue('\nGathering context...'));
+          const contextGatherer = new RipgrepContextGatherer(options.directory);
+          const result = await contextGatherer.gatherContext(errorLog);
+
+          // Display results
+          console.log(chalk.yellow('\nError Identifier:'));
+          console.log(result.errorIdentifier);
+
+          console.log(chalk.yellow('\nRelated Symbols:'));
+          console.log(result.relatedSymbols.join(', '));
+
+          console.log(chalk.yellow('\nMatches:'));
+          result.matches.forEach(match => {
+            console.log(chalk.cyan(`\nFile: ${match.filePath}`));
+            console.log(chalk.gray(`Line ${match.lineNumber}:`));
+            console.log(chalk.white(match.context.trim()));
+            console.log(chalk.red('Matched line:'));
+            console.log(chalk.red(match.matchedLine));
+          });
+
+          if (options.debug) {
+            console.log(chalk.yellow('\nDebug: Full Result:'));
+            console.log(JSON.stringify(result, null, 2));
+          }
+
+          // After displaying results, ask about saving if -s flag wasn't used
+          let shouldSave = options.save;
+          if (!shouldSave) {
+            const { save } = await inquirer.prompt<{ save: boolean }>([{
+              type: 'confirm',
+              name: 'save',
+              message: 'Would you like to save this analysis to a file?',
+              default: false
+            }]);
+            shouldSave = save;
+          }
+
+          if (shouldSave) {
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+            const defaultFilename = `code-analysis-${timestamp}.txt`;
+            
+            const { filename } = await inquirer.prompt<{ filename: string }>([{
+              type: 'input',
+              name: 'filename',
+              message: 'Enter filename for the analysis:',
+              default: defaultFilename,
+              validate: (input: string) => {
+                if (!input.trim()) return 'Filename cannot be empty';
+                if (!/\.(txt|log|md)$/.test(input)) return 'File must have a .txt, .log, or .md extension';
+                return true;
+              }
+            }]);
+
+            const analysisText = contextGatherer.formatAnalysisForSave(result);
+            const filepath = path.join(options.directory, filename);
+            
+            await fs.writeFile(filepath, analysisText, 'utf-8');
+            console.log(chalk.green(`\nAnalysis saved to: ${chalk.cyan(filepath)}`));
+          }
+
+        } catch (error) {
+          console.error(chalk.red('Error during ripgrep analysis:'), error);
           if (options.debug) {
             console.error('\nStack trace:', error);
           }
