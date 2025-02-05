@@ -15,7 +15,7 @@
   import { FileHandler } from '../utils/fileHandler';
   import { FileContent } from '../types/common';
   import { v4 as uuidv4 } from 'uuid';
-  import { RipgrepContextGatherer } from '../utils/ripgrepContext';
+ 
   // Type definitions
 
   interface AnalysisContext {
@@ -948,94 +948,6 @@
         console.log(chalk.blue('\nSession ended. Goodbye!'));
       });
 
-    program
-      .command('rg-test')
-      .description('Test ripgrep-based context gathering')
-      .option('-d, --directory <path>', 'Specify directory to scan', process.cwd())
-      .option('--debug', 'Enable debug mode', false)
-      .option('-s, --save', 'Save analysis to file', false)
-      .action(async (options) => {
-        try {
-          console.log(chalk.blue('\nRipgrep Context Gatherer Test'));
-          console.log(chalk.blue('===========================\n'));
-
-          // Get error log input
-          const { errorLog } = await inquirer.prompt<{ errorLog: string }>([{
-            type: 'editor',
-            name: 'errorLog',
-            message: 'Please paste your error log:',
-            default: ''
-          }]);
-
-          console.log(chalk.blue('\nGathering context...'));
-          const contextGatherer = new RipgrepContextGatherer(options.directory);
-          const result = await contextGatherer.gatherContext(errorLog);
-
-          // Display results
-          console.log(chalk.yellow('\nError Identifier:'));
-          console.log(result.errorIdentifier);
-
-          console.log(chalk.yellow('\nRelated Symbols:'));
-          console.log(result.relatedSymbols.join(', '));
-
-          console.log(chalk.yellow('\nMatches:'));
-          result.matches.forEach(match => {
-            console.log(chalk.cyan(`\nFile: ${match.filePath}`));
-            console.log(chalk.gray(`Line ${match.lineNumber}:`));
-            console.log(chalk.white(match.context.trim()));
-            console.log(chalk.red('Matched line:'));
-            console.log(chalk.red(match.matchedLine));
-          });
-
-          if (options.debug) {
-            console.log(chalk.yellow('\nDebug: Full Result:'));
-            console.log(JSON.stringify(result, null, 2));
-          }
-
-          // After displaying results, ask about saving if -s flag wasn't used
-          let shouldSave = options.save;
-          if (!shouldSave) {
-            const { save } = await inquirer.prompt<{ save: boolean }>([{
-              type: 'confirm',
-              name: 'save',
-              message: 'Would you like to save this analysis to a file?',
-              default: false
-            }]);
-            shouldSave = save;
-          }
-
-          if (shouldSave) {
-            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-            const defaultFilename = `code-analysis-${timestamp}.txt`;
-            
-            const { filename } = await inquirer.prompt<{ filename: string }>([{
-              type: 'input',
-              name: 'filename',
-              message: 'Enter filename for the analysis:',
-              default: defaultFilename,
-              validate: (input: string) => {
-                if (!input.trim()) return 'Filename cannot be empty';
-                if (!/\.(txt|log|md)$/.test(input)) return 'File must have a .txt, .log, or .md extension';
-                return true;
-              }
-            }]);
-
-            const analysisText = contextGatherer.formatAnalysisForSave(result);
-            const filepath = path.join(options.directory, filename);
-            
-            await fs.writeFile(filepath, analysisText, 'utf-8');
-            console.log(chalk.green(`\nAnalysis saved to: ${chalk.cyan(filepath)}`));
-          }
-
-        } catch (error) {
-          console.error(chalk.red('Error during ripgrep analysis:'), error);
-          if (options.debug) {
-            console.error('\nStack trace:', error);
-          }
-        }
-      });
-
-    program.parse();
   }
 
   // Execute
