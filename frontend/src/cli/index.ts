@@ -14,17 +14,25 @@
   import { ConversationSession, ConversationMessage } from '../types/conversation';
   import { FileHandler } from '../utils/fileHandler';
   import { FileContent } from '../types/common';
-  import { v4 as uuidv4 } from 'uuid';
+
   // Type definitions
+
+  interface Interaction {
+    prompt: string;
+    response: string;
+    timestamp: string;
+  }
 
   interface AnalysisContext {
     files: FileContent[];
     errorLog: string;
     projectContext: string;
     timestamp: string;
+    conversationHistory?: {
+      messages: ConversationMessage[];
+      interactions: Interaction[];
+    };
   }
-
-
 
   interface LLMResponse {
     answer: string;
@@ -181,17 +189,57 @@
     files: FileContent[],
     errorLog: string,
     stackTrace: ParsedStackTrace,
-    directory: string
+    directory: string,
+    session?: ConversationSession,
+    currentPrompt?: string
   ): Promise<AnalysisContext> {
     try {
       const contextGatherer = new ProjectContextGatherer(directory);
       const projectContext = await contextGatherer.formatForLLM();
 
+      let conversationHistory;
+      // console.log(session?.messages);
+      if (session?.messages) {
+        // Build interactions array from messages
+        const interactions: Interaction[] = [];
+        let userMessage: ConversationMessage | undefined;
+        
+        for (const msg of session.messages) {
+          if (msg.role === 'user') {
+            userMessage = msg;
+          } else if (msg.role === 'assistant' && userMessage) {
+            interactions.push({
+              prompt: userMessage.content,
+              response: msg.content,
+              timestamp: msg.timestamp
+            });
+            userMessage = undefined;
+          }
+        }
+
+        // Add current prompt if provided
+        if (currentPrompt) {
+          interactions.push({
+            prompt: currentPrompt,
+            response: '',
+            timestamp: new Date().toISOString()
+          });
+        }
+
+
+
+        conversationHistory = {
+          messages: session.messages,
+          interactions
+        };
+      }
+
       return {
         files,
         errorLog,
         projectContext,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        conversationHistory
       };
     } catch (error) {
       console.error(chalk.yellow('Warning: Error gathering project context:'), error);
@@ -427,21 +475,23 @@
     session?: ConversationSession
   ): Promise<APIResponse> {
     try {
-      // Parse stack trace from error log
       const stackTrace = parseStackTrace(errorLog);
-      
-      // Prepare analysis context with project information
       const analysisContext = await prepareAnalysisContext(
         files,
         errorLog,
         stackTrace,
-        process.cwd()
+        process.cwd(),
+        session,
+        prompt
       );
+
+      // Get the last assistant response if it exists
 
       const requestPayload = {
         analysisContext,
         prompt: prompt || "Please analyze the code and error log, and explain what might be wrong.",
-        conversationHistory: session?.messages || [] // Include conversation history
+        conversationHistory: session?.messages || [],
+        
       };
 
       // Save context if requested
@@ -514,6 +564,14 @@
       console.error(chalk.red('Error gathering project context:'), error);
       throw error;
     }
+  }
+
+  // Add timezone formatting helper at the top level
+  function formatTimestamp(timestamp: string): string {
+    return new Date(timestamp).toLocaleString('en-US', {
+      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      hour12: false
+    });
   }
 
   // Main CLI Application
@@ -724,15 +782,58 @@
       .description('Start an interactive debugging session')
       .option('-d, --directory <path>', 'Specify directory to scan', process.cwd())
       .option('--debug', 'Enable debug mode', false)
+      .option('-c, --continue', 'Continue an existing session', false)
       .action(async (options) => {
         const conversationManager = new ConversationManager(options.directory);
         const fileHandler = new FileHandler(options.directory);
         await conversationManager.initialize();
         
-        const session = await conversationManager.createSession();
+        let session: ConversationSession;
         let currentFiles: FileContent[] = [];
         let currentErrorLog: string = '';
-        let lastMessageId: string = '';
+        let lastMessageTimestamp: string = '';
+
+        if (options.continue) {
+          // Get recent sessions
+          const recentSessions = await conversationManager.getRecentSessions();
+          
+          if (recentSessions.length === 0) {
+            console.log(chalk.yellow('\nNo existing sessions found. Starting new session...'));
+            session = await conversationManager.createSession();
+          } else {
+            // Let user choose a session
+            const { sessionId } = await inquirer.prompt<{ sessionId: string }>([{
+              type: 'list',
+              name: 'sessionId',
+              message: 'Choose a session to continue:',
+              choices: recentSessions.map(s => ({
+                name: `${s.id} (${s.messages.length} messages)`,
+                value: s.id,
+                description: s.messages[s.messages.length - 1]?.content || 'No messages'
+              }))
+            }]);
+
+            session = await conversationManager.loadSession(sessionId);
+            
+            // Restore last state
+            const lastMessage = session.messages[session.messages.length - 1];
+            if (lastMessage) {
+              lastMessageTimestamp = lastMessage.timestamp;
+              currentFiles = lastMessage.files ? await Promise.all(
+                lastMessage.files.map(async f => ({
+                  name: f,
+                  content: await fileHandler.readFileContent(path.join(options.directory, f))
+                }))
+              ) : [];
+              currentErrorLog = lastMessage.errorLog || '';
+            }
+
+            console.log(chalk.green('\nContinuing session from:', (session.startTime).toLocaleString()));
+            console.log(chalk.gray('Last message:', new Date(lastMessageTimestamp).toLocaleString()));
+          }
+        } else {
+          session = await conversationManager.createSession();
+        }
 
         console.log(chalk.blue('\nStarting interactive debugging session...'));
         console.log(chalk.gray('Type "quit" to exit, "history" to view conversation history\n'));
@@ -744,13 +845,17 @@
             message: chalk.green('What would you like to do?')
           }]);
 
-          if (command.toLowerCase() === 'quit') break;
+          if (command.toLowerCase() === 'quit') {
+            session.endTime = new Date().toISOString();
+            await conversationManager.saveSession(session); // Final save
+            break;
+          }
           if (command.toLowerCase() === 'history') {
             // Show conversation history with resolved error summaries
             console.log(chalk.yellow('\nConversation History:'));
             session.messages.forEach((msg) => {
               const prefix = msg.isResolved ? chalk.gray('(Resolved) ') : '';
-              console.log(chalk.gray(`\n--- ${prefix}${msg.role.toUpperCase()} (${msg.timestamp}) ---`));
+              console.log(chalk.gray(`\n--- ${prefix}${msg.role.toUpperCase()} (${formatTimestamp(msg.timestamp)}) ---`));
               if (msg.contextUpdate) {
                 console.log(chalk.cyan('Context Updates:'));
                 if (msg.contextUpdate.addedFiles?.length) {
@@ -814,20 +919,21 @@
             }
           }
 
-          const messageId = uuidv4();
+          const timestamp = new Date().toISOString();
           const message: ConversationMessage = {
-            id: messageId,
+            id: timestamp,
             role: 'user',
             content: command,
-            timestamp: new Date().toISOString(),
+            timestamp: timestamp,
             files: currentFiles.map(f => f.name),
             errorLog: currentErrorLog,
-            replyTo: lastMessageId,
+            replyTo: lastMessageTimestamp,
             contextUpdate: {
               errorLogChanged
             }
           };
 
+          // Save message immediately
           await conversationManager.addMessage(session.id, message);
 
           try {
@@ -836,19 +942,20 @@
               currentErrorLog,
               command,
               options.saveContext,
-              session
+              session // Pass the updated session with the new message
             );
 
-            const assistantMessageId = uuidv4();
+            const assistantTimestamp = new Date().toISOString();
             const assistantMessage: ConversationMessage = {
-              id: assistantMessageId,
+              id: assistantTimestamp,
               role: 'assistant',
               content: response.answer,
-              timestamp: new Date().toISOString(),
-              replyTo: messageId
+              timestamp: assistantTimestamp,
+              replyTo: timestamp
             };
 
-            lastMessageId = assistantMessageId;
+            lastMessageTimestamp = assistantTimestamp;
+            // Save assistant message immediately
             await conversationManager.addMessage(session.id, assistantMessage);
             displayFormattedResponse(response);
 
@@ -867,18 +974,36 @@
                 [message, assistantMessage]
               );
 
+              const resolutionTimestamp = new Date().toISOString();
               const resolutionMessage: ConversationMessage = {
-                id: uuidv4(),
+                id: resolutionTimestamp,
                 role: 'system',
-                content: 'Session ended - Error resolved',
-                timestamp: new Date().toISOString(),
-                replyTo: assistantMessageId,
+                content: 'Error resolved',
+                timestamp: resolutionTimestamp,
+                replyTo: assistantTimestamp,
                 isResolved: true
               };
 
               await conversationManager.addMessage(session.id, resolutionMessage);
               console.log(chalk.green('\nGreat! Error has been resolved.'));
-              break; // End the session
+              
+              const { endSession } = await inquirer.prompt<{ endSession: boolean }>([{
+                type: 'confirm',
+                name: 'endSession',
+                message: 'Would you like to end the session?',
+                default: true
+              }]);
+
+              if (endSession) {
+                session.endTime = new Date().toISOString();
+                // Single final save
+                await conversationManager.saveSession(session);
+                console.log(chalk.blue('\nSession ended. Goodbye!'));
+                break;
+              }
+              
+              console.log(chalk.blue('\nContinuing session...'));
+              continue;
             }
 
             // Continue with context update handling if error not resolved
@@ -914,36 +1039,37 @@
                 fileSelection
               );
 
+              const contextUpdateTimestamp = new Date().toISOString();
               const contextUpdateMessage: ConversationMessage = {
-                id: uuidv4(),
+                id: contextUpdateTimestamp,
                 role: 'system',
                 content: 'Context updated',
-                timestamp: new Date().toISOString(),
-                replyTo: assistantMessageId,
+                timestamp: contextUpdateTimestamp,
+                replyTo: assistantTimestamp,
                 contextUpdate: {
                   addedFiles: currentFiles.slice(keepExisting ? existingFiles.length : 0).map(f => f.name),
                   removedFiles: keepExisting ? [] : existingFiles.map(f => f.name)
                 }
               };
 
+              // Save context update message immediately
               await conversationManager.addMessage(session.id, contextUpdateMessage);
             }
 
           } catch (error) {
-            console.error(chalk.red('Error during analysis:', error));
+            const errorTimestamp = new Date().toISOString();
             const errorMessage: ConversationMessage = {
-              id: uuidv4(),
+              id: errorTimestamp,
               role: 'system',
               content: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
-              timestamp: new Date().toISOString(),
-              replyTo: messageId
+              timestamp: errorTimestamp,
+              replyTo: timestamp
             };
+            // Save error message immediately
             await conversationManager.addMessage(session.id, errorMessage);
           }
         }
 
-        session.endTime = new Date().toISOString();
-        await conversationManager.saveSession(session);
         console.log(chalk.blue('\nSession ended. Goodbye!'));
       });
 

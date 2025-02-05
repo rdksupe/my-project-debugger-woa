@@ -1,28 +1,28 @@
 export interface ConversationMessage {
-  id: string;           // Add unique ID for each message
+  id: string;          // Will be timestamp
   role: 'user' | 'assistant' | 'system';
   content: string;
   timestamp: string;
+  replyTo?: string;
   files?: string[];
   errorLog?: string;
   isResolved?: boolean;
-  summary?: string;
-  replyTo?: string;    // ID of the message this is replying to
-  contextUpdate?: {     // Track context changes
+  contextUpdate?: {
     addedFiles?: string[];
     removedFiles?: string[];
     errorLogChanged?: boolean;
   };
 }
 
+export interface ResolvedError {
+  errorLog: string;
+  timestamp: string;
+}
+
 export interface ConversationSession {
-  id: string;
+  id: string;          // Will be timestamp
   startTime: string;
   endTime?: string;
   messages: ConversationMessage[];
-  resolvedErrors: {
-    errorLog: string;
-    summary: string;
-    timestamp: string;
-  }[];
+  resolvedErrors: ResolvedError[];
 }
