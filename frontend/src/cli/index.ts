@@ -150,6 +150,7 @@ async function main() {
     .option('-p, --pattern <pattern>', 'File pattern to match')
     .option('--debug', 'Enable debug mode', false)
     .option('--save-context', 'Save the analysis context to a file', false)
+    
     .action(async (options) => {
       try {
         console.log(chalk.blue('\nCode Analysis Helper'));
@@ -636,6 +637,19 @@ async function main() {
       console.log(chalk.blue('\nSession ended. Goodbye!'));
     });
 
+  program.helpOption('-h, --help', 'Display all available options for the command');
+  program.addHelpCommand(true);
+
+  // Add subcommand options to the help output
+  program.on('--help', () => {
+    console.log('\nSubcommands and their options:');
+    program.commands.forEach((cmd) => {
+      console.log(`\n${cmd.name()} - ${cmd.description()}`);
+      cmd.options.forEach((option) => {
+        console.log(`  ${option.flags}  ${option.description}`);
+      });
+    });
+  });
   program.parse();
 }
 
