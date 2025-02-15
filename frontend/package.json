@@ -17,6 +17,7 @@
     "chalk": "^5.4.1",
     "commander": "^11.1.0",
     "glob": "^11.0.1",
+    "ignore": "^7.0.3",
     "inquirer": "^9.3.7",
     "tree-sitter-cli": "^0.24.7",
     "uuid": "^11.0.5"
