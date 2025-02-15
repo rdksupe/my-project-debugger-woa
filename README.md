@@ -20,6 +20,16 @@ The CLI supports various options for its commands. For example:
 code-help --chat --directory /path/to/project --continue
 ```
 
+```sh
+# You can also specify files in the command line itself :)
+code-help chat --file <filename1> <filename2> ......  
+```
+
+
+All available commands and their subcommands can be found simply from code-help --help which will help you get started :)
+
+### Using the cli tool 
+
 
 ## Project Structure
 
