@@ -9,6 +9,7 @@ import chalk from 'chalk';
 import axios from 'axios';
 import {exec} from 'child_process'; 
 import ora from 'ora' ; 
+import ignore from 'ignore'; // New import
 // import { glob } from 'glob';
 // import { promisify } from 'util';
 // import { ProjectContextGatherer } from '../utils/ProjectContextGatherer';
@@ -330,6 +331,7 @@ async function main() {
     .option('-d, --directory <path>', 'Specify directory to scan', process.cwd())
     .option('--debug', 'Enable debug mode', false)
     .option('-c, --continue', 'Continue an existing session', false)
+    .option('--file <filenames...>', 'Specify file(s) to include immediately') // Modified option to support multiple files
     .action(async (options) => {
       
       const conversationManager = new ConversationManager(options.directory);
@@ -396,8 +398,57 @@ async function main() {
         session = await conversationManager.createSession(directory);
       }
 
+      // Add helper function to search for a file recursively
+      async function findFileRecursive(dir: string, target: string, baseDir: string): Promise<string> {
+        let ig = ignore();
+        try {
+          const gitignoreContent = await fs.readFile(path.join(options.directory, '.gitignore'), 'utf8');
+          ig = ig.add(gitignoreContent);
+        } catch (err) {
+          // No .gitignore found; use empty filter
+        }
+        
+        const entries = await fs.readdir(dir, { withFileTypes: true });
+        
+        for (const entry of entries) {
+          const fullPath = path.join(dir, entry.name);
+          // Skip if file/directory matches gitignore (relative to baseDir)
+          const relPath = path.relative(baseDir, fullPath);
+          if (ig.ignores(relPath)) continue;
       
+          if (entry.isDirectory()) {
+            const found = await findFileRecursive(fullPath, target, baseDir);
+            if (found !== 'not found') {
+              return found;
+            }
+          } else if (entry.isFile() && entry.name === target) {
+            return fullPath;
+          }
+        }
+        return 'not found';
+      }
+
+      // Handle --file option: if provided, iterate over filenames and search recursively if needed
+      if (options.file) {
+        for (const fileName of options.file) {
+          // Attempt direct resolution first
+          let filePath = path.resolve(options.directory, fileName);
+          if (!(await fs.access(filePath).then(() => true).catch(() => false))) {
+            console.log(chalk.blue(`\nSearching recursively for file ${fileName}...`));
+            filePath = await findFileRecursive(options.directory, fileName, options.directory);
+          }
+          if (filePath != 'not found' && (await fs.access(filePath).then(() => true).catch(() => false))) {
+            const content = await fileHandler.readFileContent(filePath);
+            currentFiles.push({ name: path.relative(options.directory, filePath), content });
+            console.log(chalk.green(`\nFile ${path.relative(options.directory, filePath)} added for session.`));
+          } else {
+            console.log(chalk.red(`\nFile ${fileName} not found in ${options.directory}.`));
+          }
+        }
+      }
       
+      // Load .gitignore and initialize ignore filter
+
       
       console.log(chalk.blue('\nStarting interactive debugging session...'));
       console.log(chalk.gray('Type "quit" to exit, "history" to view conversation history\n'));
@@ -437,7 +488,7 @@ async function main() {
           continue;
         }
 
-        // Initial file selection if no files are selected
+        // Initial file selection if no files are selected (will be skipped if --file succeeded)
         if (currentFiles.length === 0) {
           const { fileSelection } = await inquirer.prompt<{ fileSelection: 'scan' | 'manual' }>([{
             type: 'list',
